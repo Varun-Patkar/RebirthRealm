@@ -16,6 +16,23 @@ declare module "next-auth" {
   }
 }
 
+async function getUserId(session: any): Promise<string | null> {
+  let userId = session.user.id;
+
+  // If ID is not in the session, try to fetch it
+  if (!userId && session.user.email) {
+    const db = await getDatabase();
+    const users = db.collection('users');
+    const user = await users.findOne({ email: session.user.email });
+
+    if (user) {
+      userId = user._id.toString();
+    }
+  }
+
+  return userId;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession();
@@ -24,23 +41,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let userId = session.user.id;
-
-    // If ID is not in the session, try to fetch it
-    if (!userId && session.user.email) {
-      const db = await getDatabase();
-      const users = db.collection('users');
-      const user = await users.findOne({ email: session.user.email });
-
-      if (user) {
-        userId = user._id.toString();
-      } else {
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
-      }
-    }
+    const userId = await getUserId(session);
 
     if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
     const url = new URL(request.url);
@@ -70,6 +74,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = await getUserId(session);
+
+    if (!userId) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
     const data = await request.json();
 
     // Set default value for totalChapters if not provided
@@ -86,11 +96,7 @@ export async function POST(request: NextRequest) {
       data.totalChapters = chapters;
     }
 
-    if (!session.user.id) {
-      return NextResponse.json({ error: 'User ID not found' }, { status: 400 });
-    }
-
-    const saga = await SagaService.createSaga(data, session.user.id);
+    const saga = await SagaService.createSaga(data, userId);
     return NextResponse.json(saga, { status: 201 });
   } catch (error) {
     console.error('Error creating saga:', error);

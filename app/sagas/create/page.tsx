@@ -36,18 +36,18 @@ const sagaSchema = z.object({
 	worldDescription: z
 		.string()
 		.min(20, "Description must be at least 20 characters")
-		.max(500, "Description must be less than 500 characters"),
+		.max(4000, "Description must be less than 4000 characters"),
 	moodAndTropes: z
 		.string()
 		.min(5, "Mood/Tropes must be at least 5 characters")
-		.max(500, "Mood/Tropes must be less than 500 characters"),
+		.max(600, "Mood/Tropes must be less than 600 characters"),
 	premise: z
 		.string()
 		.min(20, "Premise must be at least 20 characters")
-		.max(500, "Premise must be less than 500 characters"),
+		.max(6000, "Premise must be less than 6000 characters"),
 	advancedOptions: z
 		.string()
-		.max(500, "Premise must be less than 500 characters")
+		.max(500, "Advanced options must be less than 500 characters")
 		.optional(),
 });
 

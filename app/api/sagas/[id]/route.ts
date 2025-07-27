@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { SagaService } from '@/lib/saga-service';
-import { UpdateSagaData } from '@/lib/types';
 import { getDatabase } from '@/lib/mongodb';
+
+// Extend the Session user type to include 'id'
+declare module "next-auth" {
+  interface Session {
+    user?: {
+      id?: string;
+      name?: string | null;
+      email?: string | null;
+      image?: string | null;
+    }
+  }
+}
 
 interface RouteParams {
   params: {
@@ -10,7 +21,24 @@ interface RouteParams {
   };
 }
 
-export async function GET(_: NextRequest, { params }: RouteParams) {
+async function getUserId(session: any): Promise<string | null> {
+  let userId = session.user.id;
+
+  // If ID is not in the session, try to fetch it
+  if (!userId && session.user.email) {
+    const db = await getDatabase();
+    const users = db.collection('users');
+    const user = await users.findOne({ email: session.user.email });
+
+    if (user) {
+      userId = user._id.toString();
+    }
+  }
+
+  return userId;
+}
+
+export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const session = await getServerSession();
 
@@ -18,23 +46,10 @@ export async function GET(_: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let userId = session.user.id;
-
-    // If ID is not in the session, try to fetch it
-    if (!userId && session.user.email) {
-      const db = await getDatabase();
-      const users = db.collection('users');
-      const user = await users.findOne({ email: session.user.email });
-
-      if (user) {
-        userId = user._id.toString();
-      } else {
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
-      }
-    }
+    const userId = await getUserId(session);
 
     if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
     const saga = await SagaService.getSagaById(params.id, userId);
@@ -50,7 +65,7 @@ export async function GET(_: NextRequest, { params }: RouteParams) {
   }
 }
 
-export async function PUT(request: NextRequest, { params }: RouteParams) {
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
   try {
     const session = await getServerSession();
 
@@ -58,42 +73,31 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let userId = session.user.id;
-
-    // If ID is not in the session, try to fetch it
-    if (!userId && session.user.email) {
-      const db = await getDatabase();
-      const users = db.collection('users');
-      const user = await users.findOne({ email: session.user.email });
-
-      if (user) {
-        userId = user._id.toString();
-      } else {
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
-      }
-    }
+    const userId = await getUserId(session);
 
     if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const data: Omit<UpdateSagaData, '_id'> = await request.json();
-    const updateData: UpdateSagaData = { ...data, _id: params.id };
+    const updateData = await request.json();
 
-    const saga = await SagaService.updateSaga(updateData, userId);
+    const updatedSaga = await SagaService.updateSaga(
+      { _id: params.id, ...updateData },
+      userId
+    );
 
-    if (!saga) {
+    if (!updatedSaga) {
       return NextResponse.json({ error: 'Saga not found' }, { status: 404 });
     }
 
-    return NextResponse.json(saga);
+    return NextResponse.json(updatedSaga);
   } catch (error) {
     console.error('Error updating saga:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function DELETE(_: NextRequest, { params }: RouteParams) {
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
     const session = await getServerSession();
 
@@ -101,23 +105,10 @@ export async function DELETE(_: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let userId = session.user.id;
-
-    // If ID is not in the session, try to fetch it
-    if (!userId && session.user.email) {
-      const db = await getDatabase();
-      const users = db.collection('users');
-      const user = await users.findOne({ email: session.user.email });
-
-      if (user) {
-        userId = user._id.toString();
-      } else {
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
-      }
-    }
+    const userId = await getUserId(session);
 
     if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
     const success = await SagaService.deleteSaga(params.id, userId);
@@ -126,87 +117,9 @@ export async function DELETE(_: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Saga not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ message: 'Saga deleted successfully' });
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting saga:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
-
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const session = await getServerSession();
-    console.log("Session:", session);
-
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const data = await request.json();
-    console.log("Updating saga with data:", data);
-    console.log("Saga ID:", params.id);
-
-    // Ensure totalChapters is a number between 1 and 1000
-    if (data.totalChapters) {
-      const chapters = parseInt(data.totalChapters);
-      if (isNaN(chapters) || chapters < 1 || chapters > 1000) {
-        return NextResponse.json({
-          error: 'Total chapters must be a number between 1 and 1000'
-        }, { status: 400 });
-      }
-      data.totalChapters = chapters;
-    }
-
-    let userId = session.user.id;
-    console.log("User ID from session:", userId);
-
-    // If ID is not in the session, try to fetch it
-    if (!userId && session.user.email) {
-      const db = await getDatabase();
-      const users = db.collection('users');
-      const user = await users.findOne({ email: session.user.email });
-
-      if (user) {
-        userId = user._id.toString();
-        console.log("User ID from database:", userId);
-      } else {
-        console.error("User not found for email:", session.user.email);
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
-      }
-    }
-
-    if (!userId) {
-      console.error("No user ID available");
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const updateData = {
-      _id: params.id,
-      ...data,
-    };
-    console.log("Final update data:", updateData);
-
-    const updatedSaga = await SagaService.updateSaga(updateData, userId);
-    console.log("Update result:", updatedSaga);
-
-    if (!updatedSaga) {
-      console.error(`Saga not found with ID ${params.id} for user ${userId}`);
-      return NextResponse.json({ error: 'Saga not found' }, { status: 404 });
-    }
-
-    return NextResponse.json(updatedSaga);
-  } catch (error) {
-    console.error('Error updating saga:', error);
-    let errorMessage = 'Unknown error';
-    if (error instanceof Error) {
-      errorMessage = error.message;
-    }
-    return NextResponse.json(
-      { error: 'Failed to update saga', details: errorMessage },
-      { status: 500 }
-    );
   }
 }

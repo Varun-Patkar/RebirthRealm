@@ -10,6 +10,7 @@ export interface Saga {
   premise: string;
   advancedOptions?: string;
   totalChapters: number;      // New field to track total planned chapters
+  storyMode?: 'player' | 'storywriter'; // New field to track story generation mode
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,13 +33,14 @@ export interface StoryNode {
   _id?: string;
   sagaId: string;
   parentId?: string | null;
-  userDecision?: string; // The free-text decision that led to this node
+  userDecision?: string; // The free-text decision that led to this node (Player mode)
+  storyDirection?: string; // The story direction for this chapter (Storywriter mode)
   summary: string;
   content: string;
   status: 'active' | 'ended' | 'unsafe'; // Track if this timeline ended
   endReason?: string; // Why the timeline ended (if status is 'ended' or 'unsafe')
   chapterNumber: number;      // New field to track which chapter this node represents
-  outline?: ChapterOutline;   // New field to store the chapter outline
+  outline?: ChapterOutline;   // New field to store the chapter outline (Player mode only)
   createdAt: Date;
 }
 

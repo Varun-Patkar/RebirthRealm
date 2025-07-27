@@ -152,6 +152,71 @@ Focus on main plot points, character development, and important decisions.
 Write in past tense, third person perspective.
 `;
 
+// New prompt for Storywriter mode
+export const STORYWRITER_NARRATIVE_PROMPT = `
+You're now the Chapter {{chapterNumber}} writer of a {{totalChapters}}-chapter story. Here's your context:
+
+STORY DIRECTION FOR THIS CHAPTER (TOP PRIORITY - FOLLOW THIS EXACTLY):
+{{storyDirection}}
+
+Background Context (use only as supporting information):
+Title: {{title}}
+World/Setting: {{worldName}}
+World Description: {{worldDescription}}
+Mood & Tropes: {{moodAndTropes}}
+General Story Premise: {{premise}}
+{{#advancedOptions}}Advanced Options: {{advancedOptions}}{{/advancedOptions}}
+{{#previousText}}Context from previous section: {{previousText}}{{/previousText}}
+{{#longTermMemory}}Long-term Memory (Earlier Chapters): {{longTermMemory}}{{/longTermMemory}}
+{{#recentMemory}}Recent Memory (Previous Chapter): {{recentMemory}}{{/recentMemory}}
+{{#userFeedback}}User Feedback (Use this to improve): {{userFeedback}}{{/userFeedback}}
+
+CRITICAL CONSTRAINTS:
+- The STORY DIRECTION above is your PRIMARY INSTRUCTION - follow it exactly and make it the main focus
+- The story direction takes absolute priority over the general premise or any other context
+- If there's any conflict between the story direction and other elements, ALWAYS follow the story direction
+- Write EXACTLY 1500-2000 words of rich, immersive story content
+- Make the events described in the story direction the central plot of this chapter
+- Include DETAILED descriptions of environments, characters, emotions, and sensory details
+- Include meaningful character development and dialogue that supports the story direction
+- Balance atmosphere building with plot advancement, but ensure the story direction is fulfilled
+- Write in second-person perspective (treating the reader as the main character)
+- End the chapter at a natural stopping point that sets up the next chapter
+- Use the background context (premise, world, etc.) only to enhance and support the main story direction
+- DO NOT let the general premise override or contradict what the user specified in the story direction
+- DO NOT include any chapter titles, chapter numbers, headings, or formatting
+- DO NOT use the word "chapter" unless it's part of the actual story dialogue/content
+- DO NOT include meta-text like "Generating Narrative:" or instructions
+- Return ONLY the narrative content with no extra text or explanations
+- Start directly with the story content
+
+WRITING STYLE:
+- Use vivid, sensory language that puts the reader in the scene
+- Vary sentence structure and length to create rhythm
+- Include both action and reflection
+- Use dialogue to reveal character and advance plot
+- Create emotional resonance through character development
+- Maintain consistent perspective (second-person)
+- Focus all narrative elements on bringing the user's story direction to life
+
+PRIORITY HIERARCHY:
+1. STORY DIRECTION (what the user wants to happen) - HIGHEST PRIORITY
+2. Previous chapter context and character continuity
+3. World/setting consistency
+4. General premise and mood (lowest priority - only use if it doesn't conflict with story direction)
+
+PACING GUIDELINES:
+- This is chapter {{chapterNumber}} out of {{totalChapters}} total chapters
+- In the first 10% of chapters: Introduce characters, establish setting, begin building the world
+- In the middle 80% of chapters: Gradually develop conflicts, relationships, and abilities
+- In the final 10% of chapters: Build toward resolution and conclusion
+- Be realistic about what can happen in a single chapter at this point in the story
+- But ALWAYS prioritize executing the user's story direction, even if it means accelerating or adjusting the pace
+
+Remember: The user's story direction is what they want to see happen in this chapter. Make it happen exactly as they described, using the background context only to enhance and support their vision.
+You MUST write at least 1500 words for this chapter section. This is critical for reader immersion.
+`;
+
 // Helper function to fill in template with values
 export function fillPromptTemplate(template: string, values: Record<string, string | undefined>): string {
 	let filledTemplate = template;

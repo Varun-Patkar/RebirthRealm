@@ -1,5 +1,5 @@
 import { StoryNode, Saga, ChapterOutline } from '@/lib/types';
-import { fillPromptTemplate, NARRATIVE_PROMPT, DECISION_EVALUATION_PROMPT, CHAPTER_OUTLINE_PROMPT, MEMORY_SUMMARIZATION_PROMPT } from '@/lib/story-prompts';
+import { fillPromptTemplate, NARRATIVE_PROMPT, STORYWRITER_NARRATIVE_PROMPT, DECISION_EVALUATION_PROMPT, CHAPTER_OUTLINE_PROMPT, MEMORY_SUMMARIZATION_PROMPT } from '@/lib/story-prompts';
 import WebLLMService from '@/lib/webllm-service';
 import type { ChatMessage } from '@/lib/webllm-service';
 
@@ -417,6 +417,178 @@ export class StoryService {
 		});
 
 		return newNode;
+	}
+
+	// New method for starting a Storywriter mode story
+	static async startNewStorywriterStory(
+		saga: Saga,
+		storyDirection: string,
+		onNarrativeUpdate?: (text: string) => void
+	): Promise<StoryNode> {
+		// Generate narrative directly without outline for Storywriter mode
+		const chapterNumber = 1;
+
+		const narrative = await this.generateStorywriterNarrative(
+			saga,
+			chapterNumber,
+			storyDirection,
+			undefined, // no previous text for first chapter
+			onNarrativeUpdate
+		);
+
+		// Create the first story node
+		const newNode = await this.createStoryNode({
+			sagaId: saga._id as string,
+			parentId: null,
+			userDecision: undefined,
+			storyDirection,
+			summary: `Chapter ${chapterNumber}: ${storyDirection.substring(0, 100)}...`,
+			content: narrative,
+			status: 'active',
+			chapterNumber: chapterNumber,
+			outline: undefined // No outline needed for Storywriter mode
+		});
+
+		return newNode;
+	}
+
+	// New method for continuing Storywriter mode story
+	static async continueStorywriterStory(
+		saga: Saga,
+		currentNode: StoryNode,
+		storyDirection: string,
+		onNarrativeUpdate?: (text: string) => void,
+		previousMemories: { longTermMemory?: string, recentMemory?: string } = {}
+	): Promise<StoryNode> {
+		const nextChapterNumber = currentNode.chapterNumber + 1;
+
+		// Generate narrative based on the story direction
+		const narrative = await this.generateStorywriterNarrative(
+			saga,
+			nextChapterNumber,
+			storyDirection,
+			currentNode.content,
+			onNarrativeUpdate,
+			undefined, // no feedback for first generation
+			previousMemories
+		);
+
+		const newNode: Omit<StoryNode, '_id' | 'createdAt'> = {
+			sagaId: saga._id!,
+			parentId: currentNode._id!,
+			userDecision: undefined,
+			storyDirection,
+			summary: `Chapter ${nextChapterNumber}: ${storyDirection.substring(0, 100)}...`,
+			content: narrative,
+			status: 'active',
+			chapterNumber: nextChapterNumber,
+			outline: undefined // No outline needed for Storywriter mode
+		};
+
+		const createdNode = await this.createStoryNode(newNode);
+		return createdNode;
+	}
+
+	// New method for regenerating Storywriter mode story
+	static async regenerateStorywriterStory(
+		saga: Saga,
+		currentNode: StoryNode,
+		userFeedback: string,
+		previousMemories: { longTermMemory?: string, recentMemory?: string } = {},
+		onNarrativeUpdate?: (text: string) => void
+	): Promise<StoryNode> {
+		const chapterNumber = currentNode.chapterNumber;
+		const storyDirection = currentNode.storyDirection!;
+
+		// Generate narrative based on the story direction and feedback
+		const narrative = await this.generateStorywriterNarrative(
+			saga,
+			chapterNumber,
+			storyDirection,
+			currentNode.content,
+			onNarrativeUpdate,
+			userFeedback,
+			previousMemories
+		);
+
+		// Update the current node with the new content
+		const updatedNode: Omit<StoryNode, '_id' | 'createdAt'> = {
+			...currentNode,
+			content: narrative
+		};
+
+		// Update the node in the database
+		const response = await fetch(`/api/stories/${currentNode._id}`, {
+			method: 'PATCH',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ node: updatedNode }),
+		});
+
+		if (!response.ok) {
+			throw new Error('Failed to update story node');
+		}
+
+		return await response.json();
+	}
+
+	// New method to generate Storywriter narrative
+	static async generateStorywriterNarrative(
+		saga: Saga,
+		chapterNumber: number,
+		storyDirection: string,
+		previousText?: string,
+		onUpdate?: (text: string) => void,
+		userFeedback?: string,
+		previousMemories: { longTermMemory?: string, recentMemory?: string } = {}
+	): Promise<string> {
+		const webLLM = WebLLMService.getInstance();
+
+		if (!webLLM.isInitialized()) {
+			throw new Error("WebLLM is not initialized");
+		}
+
+		const prompt = fillPromptTemplate(STORYWRITER_NARRATIVE_PROMPT, {
+			title: saga.title,
+			worldName: saga.worldName,
+			worldDescription: saga.worldDescription,
+			moodAndTropes: saga.moodAndTropes,
+			premise: saga.premise,
+			advancedOptions: saga.advancedOptions,
+			totalChapters: saga.totalChapters?.toString() || "100",
+			chapterNumber: chapterNumber.toString(),
+			storyDirection,
+			previousText: previousText?.slice(-500),
+			userFeedback,
+			longTermMemory: previousMemories.longTermMemory,
+			recentMemory: previousMemories.recentMemory
+		});
+
+		const messages: ChatMessage[] = [
+			{
+				role: 'system',
+				content: 'You are a creative storytelling assistant writing in second-person perspective. Your primary job is to follow the user\'s story direction exactly as specified. The story direction is your most important instruction - prioritize it above all other context. Write at least 1500 words of detailed, immersive story content that makes the user\'s vision come to life. DO NOT include any meta-text. Return ONLY pure narrative.'
+			},
+			{ role: 'user', content: prompt }
+		];
+
+		const handleUpdate = (text: string) => {
+			if (onUpdate) {
+				onUpdate(text);
+			}
+		};
+
+		const response = await webLLM.generateResponse(messages, handleUpdate);
+
+		// Clean up the response
+		const cleanedResponse = response
+			.replace(/^(Generating narrative:|Generating:|Here's the narrative:|Chapter \d+:|Story:|Content:)/i, '')
+			.replace(/^(Here is the story content:|Story content:|Narrative:|Story:|Here's the story:)/i, '')
+			.replace(/^(Chapter \d+)/i, '')
+			.trim();
+
+		return cleanedResponse;
 	}
 
 	// New method to generate memory summaries

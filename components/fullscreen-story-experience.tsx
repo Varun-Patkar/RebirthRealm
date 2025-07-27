@@ -66,6 +66,11 @@ export function FullscreenStoryExperience({
 		longTermMemory?: string;
 		recentMemory?: string;
 	}>({});
+	const [storyMode, setStoryMode] = useState<"player" | "storywriter">(
+		"player"
+	);
+	const [storyDirection, setStoryDirection] = useState("");
+	const [isSelectingMode, setIsSelectingMode] = useState(true);
 	const contentRef = useRef<HTMLDivElement>(null);
 
 	// Load existing story nodes for this saga
@@ -153,28 +158,54 @@ export function FullscreenStoryExperience({
 		if (storyNodes.length === 0) {
 			// Starting a brand new story
 			try {
-				setGenerationState(GenerationState.GENERATING_SUMMARY);
-				setGenerationProgress("Generating chapter outline...");
+				if (storyMode === "player") {
+					// Existing Player mode logic
+					setGenerationState(GenerationState.GENERATING_SUMMARY);
+					setGenerationProgress("Generating chapter outline...");
+					setMemoryContext({});
 
-				// Memory context is empty for first chapter
-				setMemoryContext({});
+					const newNode = await StoryService.startNewStory(
+						saga,
+						(text: string) =>
+							setGenerationProgress("Generating outline: " + text),
+						(text: string) => {
+							setGenerationState(GenerationState.GENERATING_NARRATIVE);
+							setGenerationProgress("Generating narrative: " + text);
+						}
+					);
 
-				// Use the new method to start a story
-				const newNode = await StoryService.startNewStory(
-					saga,
-					(text: string) =>
-						setGenerationProgress("Generating outline: " + text),
-					(text: string) => {
-						setGenerationState(GenerationState.GENERATING_NARRATIVE);
-						setGenerationProgress("Generating narrative: " + text);
+					setStoryNodes([newNode]);
+					setCurrentNodeId(newNode._id || null);
+					setGenerationState(GenerationState.AWAITING_DECISION);
+					setShowFeedback(true);
+					setGenerationProgress("");
+				} else {
+					// New Storywriter mode logic
+					if (!storyDirection.trim()) {
+						toast.error(
+							"Please provide a story direction for the first chapter"
+						);
+						return;
 					}
-				);
 
-				setStoryNodes([newNode]);
-				setCurrentNodeId(newNode._id || null);
-				setGenerationState(GenerationState.AWAITING_DECISION); // Change to AWAITING_DECISION
-				setShowFeedback(true); // Show the feedback option but don't make it required
-				setGenerationProgress("");
+					setGenerationState(GenerationState.GENERATING_NARRATIVE);
+					setGenerationProgress("Generating first chapter...");
+					setMemoryContext({});
+
+					const newNode = await StoryService.startNewStorywriterStory(
+						saga,
+						storyDirection,
+						(text: string) =>
+							setGenerationProgress("Generating narrative: " + text)
+					);
+
+					setStoryNodes([newNode]);
+					setCurrentNodeId(newNode._id || null);
+					setStoryDirection("");
+					setGenerationState(GenerationState.AWAITING_DECISION);
+					setShowFeedback(true);
+					setGenerationProgress("");
+				}
 			} catch (error) {
 				console.error("Error starting story:", error);
 				toast.error("Failed to start story");
@@ -186,10 +217,35 @@ export function FullscreenStoryExperience({
 		}
 	};
 
-	// Submit the user's decision with memory context
-	const submitDecision = async () => {
-		if (!userDecision.trim()) {
-			toast.error("Please enter your decision");
+	// New method to select story mode
+	const selectStoryMode = async (mode: "player" | "storywriter") => {
+		try {
+			// Update saga with selected mode
+			const response = await fetch(`/api/sagas/${saga._id}`, {
+				method: "PATCH",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ storyMode: mode }),
+			});
+
+			if (response.ok) {
+				setStoryMode(mode);
+				setIsSelectingMode(false);
+				saga.storyMode = mode; // Update local saga object
+			} else {
+				toast.error("Failed to set story mode");
+			}
+		} catch (error) {
+			console.error("Error setting story mode:", error);
+			toast.error("Failed to set story mode");
+		}
+	};
+
+	// New method to submit story direction (Storywriter mode)
+	const submitStoryDirection = async () => {
+		if (!storyDirection.trim()) {
+			toast.error("Please provide a story direction for the next chapter");
 			return;
 		}
 
@@ -199,63 +255,39 @@ export function FullscreenStoryExperience({
 		}
 
 		try {
-			setGenerationState(GenerationState.EVALUATING_DECISION);
+			setGenerationState(GenerationState.GENERATING_NARRATIVE);
 
 			// Build memory context for the next chapter
 			const nextChapterNumber = currentNode.chapterNumber + 1;
 			const memories = await buildMemoryContext(nextChapterNumber);
 
-			// Process the user decision
-			const result = await StoryService.processUserDecision(
+			// Generate the next chapter
+			const newNode = await StoryService.continueStorywriterStory(
 				saga,
 				currentNode,
-				userDecision,
-				(text: string) => setGenerationProgress("Generating outline: " + text),
+				storyDirection,
 				(text: string) =>
 					setGenerationProgress("Generating narrative: " + text),
-				memories // Pass memory context
+				memories
 			);
 
-			if (result.evaluation.judgment === "CONTINUE" && result.node) {
-				// Story continued successfully
-				setStoryNodes((prev) => [...prev, result.node!]);
-				setCurrentNodeId(result.node._id || null);
-				setUserDecision("");
-				setGenerationState(GenerationState.AWAITING_DECISION); // Set to AWAITING_DECISION instead of AWAITING_FEEDBACK
-				setShowFeedback(true); // Show feedback option, but don't require it
-				toast.success("Story continued!");
-			} else if (result.evaluation.judgment === "UNSAFE" && result.node) {
-				// Timeline ended due to unsafe decision
-				setStoryNodes((prev) => [...prev, result.node!]);
-				setCurrentNodeId(result.node._id || null);
-				setUserDecision("");
-				setGenerationState(GenerationState.IDLE);
-				toast.error("This timeline has ended due to an unsafe decision.");
-			} else if (result.evaluation.judgment === "CONCLUDE" && result.node) {
-				// Timeline ended naturally
-				setStoryNodes((prev) => [...prev, result.node!]);
-				setCurrentNodeId(result.node._id || null);
-				setUserDecision("");
-				setGenerationState(GenerationState.IDLE);
-				toast.success("This storyline has reached its conclusion!");
-			} else if (result.evaluation.judgment === "CLARIFY") {
-				// Need clarification
-				toast.warning(
-					`Please clarify your decision: ${result.evaluation.explanation}`
-				);
-				setGenerationState(GenerationState.AWAITING_DECISION);
-			}
+			setStoryNodes((prev) => [...prev, newNode]);
+			setCurrentNodeId(newNode._id || null);
+			setStoryDirection("");
+			setGenerationState(GenerationState.AWAITING_DECISION);
+			setShowFeedback(true);
+			toast.success("Chapter generated!");
 
 			setGenerationProgress("");
 		} catch (error) {
-			console.error("Error processing decision:", error);
-			toast.error("Failed to process your decision");
+			console.error("Error generating chapter:", error);
+			toast.error("Failed to generate chapter");
 			setGenerationState(GenerationState.AWAITING_DECISION);
 			setGenerationProgress("");
 		}
 	};
 
-	// New method to handle story regeneration
+	// Updated regeneration method to handle both modes
 	const regenerateStory = async () => {
 		if (!currentNode) return;
 
@@ -264,40 +296,43 @@ export function FullscreenStoryExperience({
 			setGenerationState(GenerationState.REGENERATING);
 			setGenerationProgress("Regenerating story based on your feedback...");
 
-			// Get current memory context for this chapter
 			const memories = await buildMemoryContext(currentNode.chapterNumber);
 
-			// Regenerate the story with feedback
-			const updatedNode = await StoryService.regenerateStory(
-				saga,
-				currentNode,
-				userFeedback,
-				memories,
-				(text: string) => setGenerationProgress("Updating outline: " + text),
-				(text: string) =>
-					setGenerationProgress("Generating new narrative: " + text)
-			);
+			let updatedNode;
+			if (storyMode === "player") {
+				updatedNode = await StoryService.regenerateStory(
+					saga,
+					currentNode,
+					userFeedback,
+					memories,
+					(text: string) => setGenerationProgress("Updating outline: " + text),
+					(text: string) =>
+						setGenerationProgress("Generating new narrative: " + text)
+				);
+			} else {
+				updatedNode = await StoryService.regenerateStorywriterStory(
+					saga,
+					currentNode,
+					userFeedback,
+					memories,
+					(text: string) =>
+						setGenerationProgress("Generating new narrative: " + text)
+				);
+			}
 
-			// Update the node in our local state
 			setStoryNodes((prev) =>
 				prev.map((node) => (node._id === updatedNode._id ? updatedNode : node))
 			);
 
-			// Clear the feedback and hide the form
 			setUserFeedback("");
 			setShowFeedbackForm(false);
-
-			// Set state back to AWAITING_DECISION so the user can continue the story
 			setGenerationState(GenerationState.AWAITING_DECISION);
-
-			// Show feedback option again in case they want to regenerate more
 			setShowFeedback(true);
 
 			toast.success("Story regenerated successfully!");
 		} catch (error) {
 			console.error("Error regenerating story:", error);
 			toast.error("Failed to regenerate story");
-			// Always return to AWAITING_DECISION state if error occurs so user isn't stuck
 			setGenerationState(GenerationState.AWAITING_DECISION);
 		} finally {
 			setIsRegenerating(false);
@@ -582,6 +617,90 @@ export function FullscreenStoryExperience({
 
 	const timelineTree = createTimelineTree();
 
+	// Check if saga has a story mode set, or if we need to select one
+	useEffect(() => {
+		if (saga.storyMode) {
+			setStoryMode(saga.storyMode);
+			setIsSelectingMode(false);
+		} else if (storyNodes.length > 0) {
+			// Determine mode from existing story nodes
+			const firstNode = storyNodes[0];
+			const mode = firstNode.storyDirection ? "storywriter" : "player";
+			setStoryMode(mode);
+			setIsSelectingMode(false);
+		} else {
+			setIsSelectingMode(true);
+		}
+	}, [saga, storyNodes]);
+
+	// Submit the user's decision with memory context (Player mode)
+	const submitDecision = async () => {
+		if (!userDecision.trim()) {
+			toast.error("Please enter your decision");
+			return;
+		}
+
+		if (!currentNode) {
+			toast.error("No current story node found");
+			return;
+		}
+
+		try {
+			setGenerationState(GenerationState.EVALUATING_DECISION);
+
+			// Build memory context for the next chapter
+			const nextChapterNumber = currentNode.chapterNumber + 1;
+			const memories = await buildMemoryContext(nextChapterNumber);
+
+			// Process the user decision
+			const result = await StoryService.processUserDecision(
+				saga,
+				currentNode,
+				userDecision,
+				(text: string) => setGenerationProgress("Generating outline: " + text),
+				(text: string) =>
+					setGenerationProgress("Generating narrative: " + text),
+				memories // Pass memory context
+			);
+
+			if (result.evaluation.judgment === "CONTINUE" && result.node) {
+				// Story continued successfully
+				setStoryNodes((prev) => [...prev, result.node!]);
+				setCurrentNodeId(result.node._id || null);
+				setUserDecision("");
+				setGenerationState(GenerationState.AWAITING_DECISION);
+				setShowFeedback(true);
+				toast.success("Story continued!");
+			} else if (result.evaluation.judgment === "UNSAFE" && result.node) {
+				// Timeline ended due to unsafe decision
+				setStoryNodes((prev) => [...prev, result.node!]);
+				setCurrentNodeId(result.node._id || null);
+				setUserDecision("");
+				setGenerationState(GenerationState.IDLE);
+				toast.error("This timeline has ended due to an unsafe decision.");
+			} else if (result.evaluation.judgment === "CONCLUDE" && result.node) {
+				// Timeline ended naturally
+				setStoryNodes((prev) => [...prev, result.node!]);
+				setCurrentNodeId(result.node._id || null);
+				setUserDecision("");
+				setGenerationState(GenerationState.IDLE);
+				toast.success("This storyline has reached its conclusion!");
+			} else if (result.evaluation.judgment === "CLARIFY") {
+				// Need clarification
+				toast.warning(
+					`Please clarify your decision: ${result.evaluation.explanation}`
+				);
+				setGenerationState(GenerationState.AWAITING_DECISION);
+			}
+
+			setGenerationProgress("");
+		} catch (error) {
+			console.error("Error processing decision:", error);
+			toast.error("Failed to process your decision");
+			setGenerationState(GenerationState.AWAITING_DECISION);
+			setGenerationProgress("");
+		}
+	};
 	return (
 		<div className="flex flex-col h-[calc(100vh-8rem)] max-w-[90%] mx-auto mt-8">
 			<div className="flex justify-between items-center mb-6">
@@ -714,6 +833,55 @@ export function FullscreenStoryExperience({
 				{/* Story tab */}
 				<TabsContent value="story" className="flex-1 flex flex-col">
 					<div className="space-y-4 flex-1 flex flex-col">
+						{/* Story Mode Selection */}
+						{isSelectingMode && storyNodes.length === 0 && (
+							<GlassCard className="p-8 max-w-5xl mx-auto w-full">
+								<h2 className="text-2xl font-bold text-white mb-6 text-center">
+									Choose Your Story Mode
+								</h2>
+								<div className="grid md:grid-cols-2 gap-6">
+									<div
+										className="p-6 border-2 border-purple-500/30 rounded-lg cursor-pointer hover:border-purple-500/60 transition-colors"
+										onClick={() => selectStoryMode("player")}
+									>
+										<h3 className="text-xl font-bold text-white mb-3">
+											🎮 Player Mode
+										</h3>
+										<p className="text-gray-300 mb-4">
+											Experience the story as it unfolds. The AI generates the
+											first chapter, then you decide what happens next through
+											your choices and actions.
+										</p>
+										<ul className="text-sm text-gray-400 space-y-1">
+											<li>• AI-generated opening chapter</li>
+											<li>• Make decisions to drive the story</li>
+											<li>• Branching narrative paths</li>
+											<li>• Surprise story developments</li>
+										</ul>
+									</div>
+									<div
+										className="p-6 border-2 border-purple-500/30 rounded-lg cursor-pointer hover:border-purple-500/60 transition-colors"
+										onClick={() => selectStoryMode("storywriter")}
+									>
+										<h3 className="text-xl font-bold text-white mb-3">
+											✍️ Storywriter Mode
+										</h3>
+										<p className="text-gray-300 mb-4">
+											Guide the narrative direction. You provide the plot
+											direction for each chapter, and the AI writes the detailed
+											story content.
+										</p>
+										<ul className="text-sm text-gray-400 space-y-1">
+											<li>• You control the story direction</li>
+											<li>• AI handles detailed writing</li>
+											<li>• Chapter-by-chapter planning</li>
+											<li>• Full creative control</li>
+										</ul>
+									</div>
+								</div>
+							</GlassCard>
+						)}
+
 						{/* Current story content */}
 						<GlassCard
 							className="p-8 lg:p-12 prose prose-invert max-w-none flex-1 overflow-auto"
@@ -755,56 +923,127 @@ export function FullscreenStoryExperience({
 							)}
 						</GlassCard>
 
-						{/* Decision input - This is always shown when awaiting decision and NOT regenerating */}
-						{generationState === GenerationState.AWAITING_DECISION ? (
+						{/* Decision input for Player mode or Story Direction for Storywriter mode */}
+						{generationState === GenerationState.AWAITING_DECISION &&
+						!isSelectingMode ? (
 							<GlassCard className="p-6 max-w-5xl mx-auto w-full">
-								<h3 className="text-lg font-bold text-white mb-4">
-									What will you do?
-								</h3>
+								{storyMode === "player" ? (
+									<>
+										<h3 className="text-lg font-bold text-white mb-4">
+											What will you do?
+										</h3>
 
-								{/* Show existing branches from this node */}
-								{getChildNodes().length > 0 && (
-									<div className="mb-4 space-y-2">
-										<p className="text-sm text-gray-400 mb-2">
-											Previously explored paths:
-										</p>
-										<div className="grid md:grid-cols-2 gap-3">
-											{getChildNodes().map((childNode) => (
+										{/* Show existing branches from this node */}
+										{getChildNodes().length > 0 && (
+											<div className="mb-4 space-y-2">
+												<p className="text-sm text-gray-400 mb-2">
+													Previously explored paths:
+												</p>
+												<div className="grid md:grid-cols-2 gap-3">
+													{getChildNodes().map((childNode) => (
+														<Button
+															key={childNode._id}
+															variant="outline"
+															className="w-full justify-start text-left bg-white/5 hover:bg-white/10 border-purple-500/30"
+															onClick={() =>
+																navigateToNode(childNode._id || null)
+															}
+														>
+															"{childNode.userDecision}"
+															{childNode.status === "ended" && " (Ended)"}
+															{childNode.status === "unsafe" && " (Unsafe)"}
+														</Button>
+													))}
+												</div>
+											</div>
+										)}
+
+										<div className="mt-4">
+											<p className="text-sm text-gray-400 mb-2">
+												Enter your decision:
+											</p>
+											<div className="flex space-x-2">
+												<Textarea
+													value={userDecision}
+													onChange={(e) => setUserDecision(e.target.value)}
+													placeholder="What do you want to do?"
+													className="bg-white/10 border-white/20 text-white placeholder-gray-500"
+												/>
 												<Button
-													key={childNode._id}
-													variant="outline"
-													className="w-full justify-start text-left bg-white/5 hover:bg-white/10 border-purple-500/30"
-													onClick={() => navigateToNode(childNode._id || null)}
+													onClick={submitDecision}
+													className="bg-purple-600 hover:bg-purple-700"
+													disabled={!userDecision.trim()}
 												>
-													"{childNode.userDecision}"
-													{childNode.status === "ended" && " (Ended)"}
-													{childNode.status === "unsafe" && " (Unsafe)"}
+													<Send className="w-4 h-4" />
 												</Button>
-											))}
+											</div>
 										</div>
-									</div>
-								)}
 
-								<div className="mt-4">
-									<p className="text-sm text-gray-400 mb-2">
-										Enter your decision:
-									</p>
-									<div className="flex space-x-2">
-										<Textarea
-											value={userDecision}
-											onChange={(e) => setUserDecision(e.target.value)}
-											placeholder="What do you want to do?"
-											className="bg-white/10 border-white/20 text-white placeholder-gray-500"
-										/>
-										<Button
-											onClick={submitDecision}
-											className="bg-purple-600 hover:bg-purple-700"
-											disabled={!userDecision.trim()}
-										>
-											<Send className="w-4 h-4" />
-										</Button>
-									</div>
-								</div>
+										{/* Optional satisfaction feedback - shown below decision input */}
+										{showFeedback && (
+											<div className="mt-6 pt-4 border-t border-white/10">
+												<p className="text-sm text-gray-400 mb-3">
+													Feedback (optional): Are you satisfied with the
+													previous story section?
+												</p>
+												<div className="flex space-x-4">
+													<Button
+														onClick={() => handleSatisfaction(true)}
+														variant="outline"
+														size="sm"
+														className="bg-green-900/20 hover:bg-green-900/30 border-green-500/30 text-green-300"
+													>
+														<ThumbsUp className="w-4 h-4 mr-2" />
+														It's good
+													</Button>
+													<Button
+														onClick={() => handleSatisfaction(false)}
+														variant="outline"
+														size="sm"
+														className="bg-amber-900/20 hover:bg-amber-900/30 border-amber-500/30 text-amber-300"
+													>
+														<ThumbsDown className="w-4 h-4 mr-2" />I want
+														changes
+													</Button>
+													<Button
+														onClick={() => setShowFeedback(false)}
+														variant="outline"
+														size="sm"
+														className="bg-white/10 hover:bg-white/20"
+													>
+														Skip feedback
+													</Button>
+												</div>
+											</div>
+										)}
+									</>
+								) : (
+									<>
+										<h3 className="text-lg font-bold text-white mb-4">
+											What happens in the next chapter?
+										</h3>
+										<div className="mt-4">
+											<p className="text-sm text-gray-400 mb-2">
+												Describe what you want to happen in the next chapter:
+											</p>
+											<div className="flex space-x-2">
+												<Textarea
+													value={storyDirection}
+													onChange={(e) => setStoryDirection(e.target.value)}
+													placeholder="Describe the story direction for the next chapter..."
+													className="bg-white/10 border-white/20 text-white placeholder-gray-500 min-h-[100px]"
+												/>
+												<Button
+													onClick={submitStoryDirection}
+													className="bg-purple-600 hover:bg-purple-700"
+													disabled={!storyDirection.trim()}
+												>
+													<Send className="w-4 h-4" />
+												</Button>
+											</div>
+										</div>
+									</>
+								)}
 
 								{/* Optional satisfaction feedback - shown below decision input */}
 								{showFeedback && (
@@ -907,6 +1146,38 @@ export function FullscreenStoryExperience({
 											>
 												<RefreshCcw className="w-4 h-4 mr-2" />
 												Regenerate Story
+											</Button>
+										</div>
+									</div>
+								</GlassCard>
+							)}
+
+						{/* Special input for first chapter in Storywriter mode */}
+						{storyMode === "storywriter" &&
+							storyNodes.length === 0 &&
+							!isSelectingMode && (
+								<GlassCard className="p-6 max-w-5xl mx-auto w-full">
+									<h3 className="text-lg font-bold text-white mb-4">
+										What happens in the first chapter?
+									</h3>
+									<div className="space-y-4">
+										<Textarea
+											value={storyDirection}
+											onChange={(e) => setStoryDirection(e.target.value)}
+											placeholder="Describe what you want to happen in the first chapter..."
+											className="bg-white/10 border-white/20 text-white placeholder-gray-500 min-h-[100px]"
+										/>
+										<div className="flex justify-end">
+											<Button
+												onClick={startOrContinueStory}
+												className="bg-purple-600 hover:bg-purple-700"
+												disabled={
+													!storyDirection.trim() ||
+													generationState !== GenerationState.IDLE
+												}
+											>
+												<Sparkles className="w-4 h-4 mr-2" />
+												Generate First Chapter
 											</Button>
 										</div>
 									</div>
